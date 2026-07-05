@@ -206,11 +206,29 @@
     });
   }
 
+  const PROVIDERS = [
+    { name: 'adsb.lol',       url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
+    { name: 'airplanes.live', url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` },
+    { name: 'adsb.fi',        url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
+  ];
+
   async function fetchAircraft(lat, lon, radiusNm) {
-    const r = await fetch(`https://api.adsb.lol/v2/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${radiusNm}`);
-    if (!r.ok) throw new Error('AC_API');
-    const data = await r.json();
-    return (data.ac || []).filter(a => a.alt_baro !== 'ground' && a.lat != null && a.lon != null);
+    const la = lat.toFixed(4), lo = lon.toFixed(4);
+    const errors = [];
+    for (const p of PROVIDERS) {
+      try {
+        const r = await fetch(p.url(la, lo, radiusNm));
+        if (!r.ok) { errors.push(`${p.name}: HTTP ${r.status}`); continue; }
+        const data = await r.json();
+        const ac = (data.ac || data.aircraft || []).filter(a => a.alt_baro !== 'ground' && a.lat != null && a.lon != null);
+        return { ac, provider: p.name };
+      } catch (e) {
+        errors.push(`${p.name}: ${e.message || 'network/CORS error'}`);
+      }
+    }
+    const err = new Error('AC_API');
+    err.detail = errors.join(' · ');
+    throw err;
   }
 
   async function fetchRoutes(planes) {
@@ -330,12 +348,14 @@
   async function scan() {
     scanBtn.disabled = true;
     results.innerHTML = '';
+    let step = 'location';
     try {
       setStatus('Getting your location…', true);
       const me = await getPosition();
+      step = 'aircraft data';
       const radius = Number($('range').value);
       setStatus(`Scanning within ${radius} nm…`, true);
-      const aircraft = await fetchAircraft(me.latitude, me.longitude, radius);
+      const { ac: aircraft, provider } = await fetchAircraft(me.latitude, me.longitude, radius);
 
       if (!aircraft.length) {
         setStatus(`Scan complete · ${new Date().toLocaleTimeString()}`);
@@ -352,23 +372,27 @@
         return slant(a) - slant(b);
       });
 
+      step = 'routes';
       setStatus('Looking up routes…', true);
       const routes = await fetchRoutes(aircraft);
 
-      setStatus(`${aircraft.length} aircraft overhead · closest first · ${new Date().toLocaleTimeString()}`);
+      step = 'rendering';
+      setStatus(`${aircraft.length} aircraft overhead · closest first · via ${provider} · ${new Date().toLocaleTimeString()}`);
       for (const ac of aircraft) {
         const card = renderCard(ac, me, routes[(ac.flight || '').trim()]);
         results.appendChild(card);
         attachPhoto(card, ac.hex); // async, fills in as it arrives
       }
     } catch (e) {
-      let title = 'Something went wrong', msg = 'Could not complete the scan. Check your connection and try again.';
-      if (e && (e.code === 1)) { title = 'Location permission needed'; msg = 'This site needs your location to know which patch of sky to check. Allow location access in your browser and scan again. Your position is only sent to the aircraft-data API as a search point.'; }
+      let title = 'Something went wrong', msg = `Failed at the ${step} step. Check your connection and try again.`;
+      if (e && e.code === 1) { title = 'Location permission needed'; msg = 'This site needs your location to know which patch of sky to check. Allow location access in your browser and scan again. Note: browsers only allow geolocation over HTTPS (or localhost) — it will not work from a plain http:// page or a file opened from disk.'; }
+      else if (e && e.code === 2) { title = 'Location unavailable'; msg = 'Your device could not determine a position (no GPS/Wi-Fi fix). Try again, or move somewhere with better reception.'; }
       else if (e && e.code === 3) { title = 'Location timed out'; msg = 'Your device took too long to report a position. Try again — it usually works on the second attempt.'; }
       else if (e && e.message === 'NO_GEO') { title = 'No location support'; msg = 'This browser does not support geolocation, so the sky above you cannot be determined.'; }
-      else if (e && e.message === 'AC_API') { title = 'Aircraft data unavailable'; msg = 'The adsb.lol API did not respond. It is a free community service and occasionally busy — try again shortly.'; }
+      else if (e && e.message === 'AC_API') { title = 'Aircraft data unavailable'; msg = 'All three data providers failed to respond. They are free community services — try again shortly.'; }
+      const detail = (e && (e.detail || (e.message && e.message !== 'AC_API' && e.message !== 'NO_GEO' ? e.message : '')));
       setStatus('Scan failed');
-      results.innerHTML = `<div class="error"><h2>${title}</h2><p>${msg}</p></div>`;
+      results.innerHTML = `<div class="error"><h2>${esc(title)}</h2><p>${esc(msg)}</p>${detail ? `<p class="mono" style="margin-top:8px;font-size:12px">Details: ${esc(detail)}</p>` : ''}</div>`;
     } finally {
       scanBtn.disabled = false;
     }
