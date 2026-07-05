@@ -54,6 +54,9 @@
   }
   button.scan:hover { background: #163d5f; }
   button.scan:disabled { opacity: 0.55; cursor: wait; }
+  button.follow { background: var(--contrail); color: var(--zenith); border: 1px solid var(--horizon); font-weight: 400; }
+  button.follow:hover { background: var(--cirrus); }
+  button.follow[aria-pressed="true"] { background: var(--intl-orange); border-color: var(--intl-orange); color: #fff; font-weight: 700; }
   select {
     font-family: 'B612 Mono', monospace; font-size: 13px; color: var(--zenith);
     background: var(--contrail); border: 1px solid var(--horizon);
@@ -147,6 +150,7 @@
 
   <div class="controls">
     <button class="scan" id="scanBtn">Scan the sky</button>
+    <button class="scan follow" id="followBtn" aria-pressed="false">Follow my compass</button>
     <label>
       <span class="eyebrow" style="margin-right:6px">Range</span>
       <select id="range" aria-label="Search range">
@@ -162,7 +166,7 @@
 
   <footer>
     Live positions: <a href="https://adsb.lol">adsb.lol</a> (community ADS-B) ·
-    Routes: adsb.lol route DB · Photos: <a href="https://www.planespotters.net">Planespotters.net</a><br>
+    Routes: adsb.lol route DB + <a href="https://www.adsbdb.com">adsbdb.com</a> · Photos: <a href="https://www.planespotters.net">Planespotters.net</a><br>
     Positions update every few seconds; routes are best-effort and some flights (private, military, cargo repositioning) won't have one.
   </footer>
 </div>
@@ -231,23 +235,66 @@
     throw err;
   }
 
-  async function fetchRoutes(planes) {
-    const withCallsign = planes.filter(p => (p.flight || '').trim());
-    if (!withCallsign.length) return {};
+  const routeCache = new Map();
+
+  async function routeFromRouteset(planes) {
     try {
       const r = await fetch('https://api.adsb.lol/api/0/routeset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planes: withCallsign.map(p => ({ callsign: p.flight.trim(), lat: p.lat, lng: p.lon })) })
+        body: JSON.stringify({ planes: planes.map(p => ({ callsign: p.flight.trim(), lat: p.lat, lng: p.lon })) })
       });
       if (!r.ok) return {};
       const arr = await r.json();
       const out = {};
       for (const item of arr) {
-        if (item.callsign && item.airport_codes && item.airport_codes !== 'unknown') out[item.callsign] = item;
+        if (item.callsign && item.airport_codes && item.airport_codes !== 'unknown') {
+          out[item.callsign] = {
+            codes: item.airport_codes.split('-'),
+            names: (item._airports || []).map(a => `${a.name}${a.location ? ', ' + a.location : ''}`),
+            airline: null
+          };
+        }
       }
       return out;
     } catch { return {}; }
+  }
+
+  async function routeFromAdsbdb(callsign) {
+    try {
+      const r = await fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(callsign)}`);
+      if (!r.ok) return null;
+      const d = await r.json();
+      const fr = d.response && d.response.flightroute;
+      if (!fr || !fr.origin || !fr.destination) return null;
+      const name = (a) => `${a.name}${a.municipality ? ', ' + a.municipality : ''}`;
+      return {
+        codes: [fr.origin.iata_code || fr.origin.icao_code, fr.destination.iata_code || fr.destination.icao_code],
+        names: [name(fr.origin), name(fr.destination)],
+        airline: fr.airline && fr.airline.name ? fr.airline.name : null
+      };
+    } catch { return null; }
+  }
+
+  async function fetchRoutes(planes) {
+    const withCallsign = planes.filter(p => (p.flight || '').trim());
+    if (!withCallsign.length) return {};
+    const out = {};
+    for (const p of withCallsign) {
+      const cs = p.flight.trim();
+      if (routeCache.has(cs)) out[cs] = routeCache.get(cs);
+    }
+    const missing = withCallsign.filter(p => !(p.flight.trim() in out));
+    if (missing.length) {
+      const batch = await routeFromRouteset(missing);
+      Object.assign(out, batch);
+      // Per-callsign fallback for whatever the batch didn't cover (cap to be kind to the free API)
+      const still = missing.map(p => p.flight.trim()).filter(cs => !(cs in out)).slice(0, 10);
+      const found = await Promise.all(still.map(cs => routeFromAdsbdb(cs)));
+      still.forEach((cs, i) => { if (found[i]) out[cs] = found[i]; });
+    }
+    for (const [cs, r] of Object.entries(out)) routeCache.set(cs, r);
+    return out;
   }
 
   async function fetchPhoto(hex) {
@@ -268,11 +315,13 @@
   function compassSVG(bearing) {
     const ticks = [0,90,180,270].map(a =>
       `<line x1="70" y1="8" x2="70" y2="16" stroke="#52708A" stroke-width="2" transform="rotate(${a} 70 70)"/>`).join('');
-    return `<svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="Bearing ${Math.round(bearing)} degrees">
+    return `<svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="Bearing ${Math.round(bearing)} degrees" class="compass" data-bearing="${bearing.toFixed(1)}">
       <circle cx="70" cy="70" r="64" fill="#F3F7FB" stroke="#C9DDEE" stroke-width="2"/>
-      ${ticks}
-      <text x="70" y="30" text-anchor="middle" font-family="B612 Mono" font-size="12" fill="#52708A">N</text>
-      <g transform="rotate(${bearing} 70 70)">
+      <g class="rose" transform="rotate(0 70 70)">
+        ${ticks}
+        <text x="70" y="30" text-anchor="middle" font-family="B612 Mono" font-size="12" fill="#52708A">N</text>
+      </g>
+      <g class="needle" transform="rotate(${bearing} 70 70)">
         <path d="M70 22 L80 78 L70 68 L60 78 Z" fill="#E84A00"/>
       </g>
       <circle cx="70" cy="70" r="4" fill="#0E2A43"/>
@@ -293,13 +342,11 @@
     const callsign = (ac.flight || '').trim() || 'No callsign';
     const typeName = ac.desc || ac.t || 'Unknown type';
 
-    let routeHtml = `<div class="route names">Route not in the public database (common for private, cargo and military flights).</div>`;
+    let routeHtml = `<div class="route names">Route not in the public databases (common for private, cargo and military flights).</div>`;
     if (route) {
-      const codes = route.airport_codes.split('-');
-      const names = (route._airports || []).map(a => `${a.name}${a.location ? ', ' + a.location : ''}`);
       routeHtml = `<div class="route">
-        <div class="codes">${codes.map(esc).join(' <span class="arrow">→</span> ')}</div>
-        ${names.length ? `<div class="names">${names.map(esc).join(' → ')}</div>` : ''}
+        <div class="codes">${route.codes.map(esc).join(' <span class="arrow">→</span> ')}${route.airline ? ` <span class="names">· ${esc(route.airline)}</span>` : ''}</div>
+        ${route.names.length ? `<div class="names">${route.names.map(esc).join(' → ')}</div>` : ''}
       </div>`;
     }
 
@@ -383,6 +430,7 @@
         results.appendChild(card);
         attachPhoto(card, ac.hex); // async, fills in as it arrives
       }
+      if (following && heading != null) applyHeading();
     } catch (e) {
       let title = 'Something went wrong', msg = `Failed at the ${step} step. Check your connection and try again.`;
       if (e && e.code === 1) { title = 'Location permission needed'; msg = 'This site needs your location to know which patch of sky to check. Allow location access in your browser and scan again. Note: browsers only allow geolocation over HTTPS (or localhost) — it will not work from a plain http:// page or a file opened from disk.'; }
@@ -399,6 +447,67 @@
   }
 
   scanBtn.addEventListener('click', scan);
+
+  // ---- Live compass follow mode ----
+  // When on: the compass rose rotates with the phone (like a real compass),
+  // and each needle shows plane bearing relative to where you're facing —
+  // point the phone so the arrow is straight up, and you're facing the plane.
+  const followBtn = $('followBtn');
+  let heading = null, following = false, rafPending = false, gotEvent = false;
+
+  function applyHeading() {
+    rafPending = false;
+    const h = following && heading != null ? heading : 0;
+    document.querySelectorAll('.compass').forEach(svg => {
+      const b = parseFloat(svg.dataset.bearing);
+      svg.querySelector('.rose').setAttribute('transform', `rotate(${-h} 70 70)`);
+      svg.querySelector('.needle').setAttribute('transform', `rotate(${b - h} 70 70)`);
+    });
+  }
+
+  function onOrientation(e) {
+    let h = null;
+    if (typeof e.webkitCompassHeading === 'number') {
+      h = e.webkitCompassHeading;                      // iOS: already degrees clockwise from north
+    } else if (e.alpha != null && (e.absolute === true || e.type === 'deviceorientationabsolute')) {
+      const screenAngle = (screen.orientation && screen.orientation.angle) || 0;
+      h = (360 - e.alpha + screenAngle) % 360;         // Android absolute orientation
+    }
+    if (h == null) return;
+    gotEvent = true;
+    heading = h;
+    if (!rafPending) { rafPending = true; requestAnimationFrame(applyHeading); }
+  }
+
+  const ORIENT_EVENT = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+
+  async function toggleFollow() {
+    if (following) {
+      following = false; heading = null; gotEvent = false;
+      window.removeEventListener(ORIENT_EVENT, onOrientation);
+      followBtn.setAttribute('aria-pressed', 'false');
+      followBtn.textContent = 'Follow my compass';
+      applyHeading();
+      return;
+    }
+    // iOS 13+ requires an explicit permission request from a user gesture
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        const perm = await DeviceOrientationEvent.requestPermission();
+        if (perm !== 'granted') { setStatus('Compass permission denied — arrows will stay north-up.'); return; }
+      } catch { setStatus('Compass permission request failed — arrows will stay north-up.'); return; }
+    }
+    following = true;
+    window.addEventListener(ORIENT_EVENT, onOrientation);
+    followBtn.setAttribute('aria-pressed', 'true');
+    followBtn.textContent = 'Following compass';
+    setStatus('Compass on — turn until an arrow points straight up, then look up at that angle.');
+    setTimeout(() => {
+      if (following && !gotEvent) setStatus('No compass data from this device (desktops usually have none) — arrows are north-up.');
+    }, 3000);
+  }
+
+  followBtn.addEventListener('click', toggleFollow);
 })();
 </script>
 </body>
