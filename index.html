@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>What was that? — identify the aircraft overhead</title>
+<meta name="description" content="Uses your location to identify aircraft overhead right now: altitude, speed, route, aircraft type, and a photo.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=B612:ital,wght@0,400;0,700;1,400&family=B612+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --zenith: #0E2A43;      /* deep flight-deck navy — primary text */
+    --cirrus: #F3F7FB;      /* paper-sky background */
+    --horizon: #C9DDEE;     /* soft sky tint — rules, chips */
+    --intl-orange: #E84A00; /* international orange — "look here" only */
+    --contrail: #FFFFFF;    /* cards */
+    --altimeter: #52708A;   /* secondary text */
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: 'B612', system-ui, sans-serif;
+    background: linear-gradient(180deg, #E4F0F9 0%, var(--cirrus) 340px);
+    color: var(--zenith);
+    min-height: 100vh;
+    line-height: 1.45;
+  }
+  .mono { font-family: 'B612 Mono', ui-monospace, monospace; }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--intl-orange); outline-offset: 2px; border-radius: 4px; }
+
+  .wrap { max-width: 720px; margin: 0 auto; padding: 28px 18px 80px; }
+
+  header { padding: 18px 0 26px; }
+  .eyebrow {
+    font-family: 'B612 Mono', monospace;
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--altimeter);
+  }
+  h1 { font-size: clamp(30px, 7vw, 44px); font-weight: 700; letter-spacing: -0.01em; margin-top: 6px; }
+  h1 .q { color: var(--intl-orange); }
+  .sub { color: var(--altimeter); margin-top: 8px; max-width: 46ch; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    margin: 22px 0 8px;
+  }
+  button.scan {
+    font-family: 'B612', sans-serif; font-weight: 700; font-size: 16px;
+    background: var(--zenith); color: #fff; border: none; cursor: pointer;
+    padding: 12px 22px; border-radius: 999px;
+  }
+  button.scan:hover { background: #163d5f; }
+  button.scan:disabled { opacity: 0.55; cursor: wait; }
+  select {
+    font-family: 'B612 Mono', monospace; font-size: 13px; color: var(--zenith);
+    background: var(--contrail); border: 1px solid var(--horizon);
+    border-radius: 999px; padding: 10px 14px; cursor: pointer;
+  }
+  .statusline {
+    font-family: 'B612 Mono', monospace; font-size: 13px; color: var(--altimeter);
+    margin: 10px 0 24px; min-height: 1.4em;
+  }
+  .statusline.scanning::after {
+    content: "▌"; color: var(--intl-orange);
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .statusline.scanning::after { animation: none; }
+  }
+
+  .empty, .error {
+    background: var(--contrail); border: 1px solid var(--horizon);
+    border-radius: var(--radius); padding: 34px 26px; text-align: center;
+  }
+  .empty h2 { font-size: 26px; margin-bottom: 6px; }
+  .empty p, .error p { color: var(--altimeter); }
+  .error { border-left: 5px solid var(--intl-orange); text-align: left; }
+  .error h2 { font-size: 18px; margin-bottom: 6px; }
+
+  .card {
+    background: var(--contrail); border: 1px solid var(--horizon);
+    border-radius: var(--radius); margin-bottom: 20px; overflow: hidden;
+  }
+  .card-head {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 16px 20px 0;
+  }
+  .callsign { font-size: 24px; font-weight: 700; letter-spacing: 0.02em; }
+  .reg { font-family: 'B612 Mono', monospace; font-size: 13px; color: var(--altimeter); }
+  .typeline { padding: 2px 20px 0; color: var(--altimeter); font-size: 14px; }
+
+  .card-body { display: flex; gap: 18px; padding: 16px 20px 18px; flex-wrap: wrap; }
+
+  /* Signature: WHERE TO LOOK compass */
+  .look { flex: 0 0 168px; text-align: center; }
+  .look .label {
+    font-family: 'B612 Mono', monospace; font-size: 11px; letter-spacing: 0.16em;
+    color: var(--intl-orange); text-transform: uppercase; margin-bottom: 6px;
+  }
+  .look svg { display: block; margin: 0 auto; }
+  .look .readout { font-family: 'B612 Mono', monospace; font-size: 13px; margin-top: 8px; }
+  .look .readout strong { color: var(--intl-orange); }
+
+  .data { flex: 1 1 260px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; align-content: start; }
+  .datum .k {
+    font-family: 'B612 Mono', monospace; font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--altimeter);
+  }
+  .datum .v { font-family: 'B612 Mono', monospace; font-size: 16px; font-weight: 700; }
+  .datum .v small { font-weight: 400; color: var(--altimeter); font-size: 12px; }
+
+  .route {
+    border-top: 1px dashed var(--horizon); padding: 12px 20px; font-size: 14px;
+  }
+  .route .codes { font-family: 'B612 Mono', monospace; font-weight: 700; }
+  .route .arrow { color: var(--intl-orange); font-weight: 700; }
+  .route .names { color: var(--altimeter); font-size: 13px; margin-top: 2px; }
+
+  .photo { border-top: 1px solid var(--horizon); }
+  .photo img { display: block; width: 100%; max-height: 300px; object-fit: cover; }
+  .credit {
+    font-family: 'B612 Mono', monospace; font-size: 11px; color: var(--altimeter);
+    padding: 6px 20px 12px;
+  }
+
+  footer {
+    margin-top: 40px; font-family: 'B612 Mono', monospace;
+    font-size: 11px; color: var(--altimeter); line-height: 1.8;
+  }
+  @media (max-width: 480px) {
+    .card-body { gap: 10px; }
+    .look { flex-basis: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Overhead aircraft identifier</div>
+    <h1>What was that<span class="q">?</span></h1>
+    <p class="sub">Hear a plane? Press scan. This checks the sky above your location and tells you what's flying over — and where to look.</p>
+  </header>
+
+  <div class="controls">
+    <button class="scan" id="scanBtn">Scan the sky</button>
+    <label>
+      <span class="eyebrow" style="margin-right:6px">Range</span>
+      <select id="range" aria-label="Search range">
+        <option value="5">5 nm — right on top of you</option>
+        <option value="10" selected>10 nm — hear or see it</option>
+        <option value="25">25 nm — the wider sky</option>
+      </select>
+    </label>
+  </div>
+  <div class="statusline" id="status" role="status">Ready. Your location is only used in your browser — it is sent to the aircraft API as a search point and never stored here.</div>
+
+  <main id="results"></main>
+
+  <footer>
+    Live positions: <a href="https://adsb.lol">adsb.lol</a> (community ADS-B) ·
+    Routes: adsb.lol route DB · Photos: <a href="https://www.planespotters.net">Planespotters.net</a><br>
+    Positions update every few seconds; routes are best-effort and some flights (private, military, cargo repositioning) won't have one.
+  </footer>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status'), results = $('results'), scanBtn = $('scanBtn');
+  const photoCache = new Map();
+  const NM_TO_KM = 1.852, FT_TO_M = 0.3048;
+  const DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+
+  const setStatus = (msg, scanning=false) => {
+    statusEl.textContent = msg;
+    statusEl.classList.toggle('scanning', scanning);
+  };
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371, toR = Math.PI/180;
+    const dLat = (lat2-lat1)*toR, dLon = (lon2-lon1)*toR;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*toR)*Math.cos(lat2*toR)*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(a));
+  }
+  function bearingDeg(lat1, lon1, lat2, lon2) {
+    const toR = Math.PI/180;
+    const y = Math.sin((lon2-lon1)*toR)*Math.cos(lat2*toR);
+    const x = Math.cos(lat1*toR)*Math.sin(lat2*toR) - Math.sin(lat1*toR)*Math.cos(lat2*toR)*Math.cos((lon2-lon1)*toR);
+    return (Math.atan2(y,x)*180/Math.PI + 360) % 360;
+  }
+  const dirName = (b) => DIRS[Math.round(b/22.5) % 16];
+
+  function getPosition() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error('NO_GEO'));
+      navigator.geolocation.getCurrentPosition(
+        p => resolve(p.coords),
+        e => reject(e),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+      );
+    });
+  }
+
+  async function fetchAircraft(lat, lon, radiusNm) {
+    const r = await fetch(`https://api.adsb.lol/v2/point/${lat.toFixed(4)}/${lon.toFixed(4)}/${radiusNm}`);
+    if (!r.ok) throw new Error('AC_API');
+    const data = await r.json();
+    return (data.ac || []).filter(a => a.alt_baro !== 'ground' && a.lat != null && a.lon != null);
+  }
+
+  async function fetchRoutes(planes) {
+    const withCallsign = planes.filter(p => (p.flight || '').trim());
+    if (!withCallsign.length) return {};
+    try {
+      const r = await fetch('https://api.adsb.lol/api/0/routeset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planes: withCallsign.map(p => ({ callsign: p.flight.trim(), lat: p.lat, lng: p.lon })) })
+      });
+      if (!r.ok) return {};
+      const arr = await r.json();
+      const out = {};
+      for (const item of arr) {
+        if (item.callsign && item.airport_codes && item.airport_codes !== 'unknown') out[item.callsign] = item;
+      }
+      return out;
+    } catch { return {}; }
+  }
+
+  async function fetchPhoto(hex) {
+    if (photoCache.has(hex)) return photoCache.get(hex);
+    let result = null;
+    try {
+      const r = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
+      if (r.ok) {
+        const d = await r.json();
+        const p = d.photos && d.photos[0];
+        if (p) result = { src: p.thumbnail_large?.src || p.thumbnail?.src, link: p.link, photographer: p.photographer };
+      }
+    } catch {}
+    photoCache.set(hex, result);
+    return result;
+  }
+
+  function compassSVG(bearing) {
+    const ticks = [0,90,180,270].map(a =>
+      `<line x1="70" y1="8" x2="70" y2="16" stroke="#52708A" stroke-width="2" transform="rotate(${a} 70 70)"/>`).join('');
+    return `<svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="Bearing ${Math.round(bearing)} degrees">
+      <circle cx="70" cy="70" r="64" fill="#F3F7FB" stroke="#C9DDEE" stroke-width="2"/>
+      ${ticks}
+      <text x="70" y="30" text-anchor="middle" font-family="B612 Mono" font-size="12" fill="#52708A">N</text>
+      <g transform="rotate(${bearing} 70 70)">
+        <path d="M70 22 L80 78 L70 68 L60 78 Z" fill="#E84A00"/>
+      </g>
+      <circle cx="70" cy="70" r="4" fill="#0E2A43"/>
+    </svg>`;
+  }
+
+  function datum(k, v, unit='') {
+    return `<div class="datum"><div class="k">${k}</div><div class="v">${v}${unit ? ` <small>${unit}</small>` : ''}</div></div>`;
+  }
+
+  function renderCard(ac, me, route) {
+    const distKm = haversineKm(me.latitude, me.longitude, ac.lat, ac.lon);
+    const brg = bearingDeg(me.latitude, me.longitude, ac.lat, ac.lon);
+    const altFt = typeof ac.alt_baro === 'number' ? ac.alt_baro : (typeof ac.alt_geom === 'number' ? ac.alt_geom : null);
+    const elev = altFt != null ? Math.round(Math.atan2(altFt*FT_TO_M, distKm*1000) * 180/Math.PI) : null;
+    const gs = typeof ac.gs === 'number' ? ac.gs : null;
+    const vr = typeof ac.baro_rate === 'number' ? ac.baro_rate : null;
+    const callsign = (ac.flight || '').trim() || 'No callsign';
+    const typeName = ac.desc || ac.t || 'Unknown type';
+
+    let routeHtml = `<div class="route names">Route not in the public database (common for private, cargo and military flights).</div>`;
+    if (route) {
+      const codes = route.airport_codes.split('-');
+      const names = (route._airports || []).map(a => `${a.name}${a.location ? ', ' + a.location : ''}`);
+      routeHtml = `<div class="route">
+        <div class="codes">${codes.map(esc).join(' <span class="arrow">→</span> ')}</div>
+        ${names.length ? `<div class="names">${names.map(esc).join(' → ')}</div>` : ''}
+      </div>`;
+    }
+
+    const card = document.createElement('article');
+    card.className = 'card';
+    card.dataset.hex = ac.hex;
+    card.innerHTML = `
+      <div class="card-head">
+        <div class="callsign">${esc(callsign)}</div>
+        <div class="reg">${esc(ac.r || '')} · ${esc((ac.hex || '').toUpperCase())}</div>
+      </div>
+      <div class="typeline">${esc(typeName)}${ac.t && ac.desc ? ` (${esc(ac.t)})` : ''}</div>
+      <div class="card-body">
+        <div class="look">
+          <div class="label">Where to look</div>
+          ${compassSVG(brg)}
+          <div class="readout">Look <strong>${dirName(brg)}</strong>${elev != null ? `, <strong>${elev}°</strong> up` : ''}<br>${distKm < 1.6 ? (distKm*1000).toFixed(0) + ' m' : (distKm/1.609).toFixed(1) + ' mi'} away</div>
+        </div>
+        <div class="data">
+          ${datum('Altitude', altFt != null ? altFt.toLocaleString() : '—', altFt != null ? 'ft' : '')}
+          ${datum('Ground speed', gs != null ? Math.round(gs*1.15078) : '—', gs != null ? 'mph' : '')}
+          ${datum('Heading', typeof ac.track === 'number' ? Math.round(ac.track) + '° ' + dirName(ac.track) : '—')}
+          ${datum('Climb / descent', vr != null ? (vr > 0 ? '+' : '') + vr.toLocaleString() : '—', vr != null ? 'ft/min' : '')}
+        </div>
+      </div>
+      ${routeHtml}
+      <div class="photo-slot"></div>
+    `;
+    return card;
+  }
+
+  async function attachPhoto(card, hex) {
+    const photo = await fetchPhoto(hex);
+    const slot = card.querySelector('.photo-slot');
+    if (!slot) return;
+    if (photo && photo.src) {
+      slot.innerHTML = `<div class="photo">
+        <a href="${esc(photo.link)}" target="_blank" rel="noopener">
+          <img src="${esc(photo.src)}" alt="Photo of this aircraft type" loading="lazy">
+        </a>
+        <div class="credit">Photo © ${esc(photo.photographer)} / Planespotters.net</div>
+      </div>`;
+    }
+  }
+
+  async function scan() {
+    scanBtn.disabled = true;
+    results.innerHTML = '';
+    try {
+      setStatus('Getting your location…', true);
+      const me = await getPosition();
+      const radius = Number($('range').value);
+      setStatus(`Scanning within ${radius} nm…`, true);
+      const aircraft = await fetchAircraft(me.latitude, me.longitude, radius);
+
+      if (!aircraft.length) {
+        setStatus(`Scan complete · ${new Date().toLocaleTimeString()}`);
+        results.innerHTML = `<div class="empty"><h2>Nothing overhead!</h2><p>No aircraft within ${radius} nautical miles of you right now. Try a wider range, or scan again in a minute.</p></div>`;
+        return;
+      }
+
+      aircraft.sort((a, b) => {
+        const slant = (ac) => {
+          const d = haversineKm(me.latitude, me.longitude, ac.lat, ac.lon) * 1000;
+          const h = (typeof ac.alt_baro === 'number' ? ac.alt_baro : 0) * FT_TO_M;
+          return Math.hypot(d, h);
+        };
+        return slant(a) - slant(b);
+      });
+
+      setStatus('Looking up routes…', true);
+      const routes = await fetchRoutes(aircraft);
+
+      setStatus(`${aircraft.length} aircraft overhead · closest first · ${new Date().toLocaleTimeString()}`);
+      for (const ac of aircraft) {
+        const card = renderCard(ac, me, routes[(ac.flight || '').trim()]);
+        results.appendChild(card);
+        attachPhoto(card, ac.hex); // async, fills in as it arrives
+      }
+    } catch (e) {
+      let title = 'Something went wrong', msg = 'Could not complete the scan. Check your connection and try again.';
+      if (e && (e.code === 1)) { title = 'Location permission needed'; msg = 'This site needs your location to know which patch of sky to check. Allow location access in your browser and scan again. Your position is only sent to the aircraft-data API as a search point.'; }
+      else if (e && e.code === 3) { title = 'Location timed out'; msg = 'Your device took too long to report a position. Try again — it usually works on the second attempt.'; }
+      else if (e && e.message === 'NO_GEO') { title = 'No location support'; msg = 'This browser does not support geolocation, so the sky above you cannot be determined.'; }
+      else if (e && e.message === 'AC_API') { title = 'Aircraft data unavailable'; msg = 'The adsb.lol API did not respond. It is a free community service and occasionally busy — try again shortly.'; }
+      setStatus('Scan failed');
+      results.innerHTML = `<div class="error"><h2>${title}</h2><p>${msg}</p></div>`;
+    } finally {
+      scanBtn.disabled = false;
+    }
+  }
+
+  scanBtn.addEventListener('click', scan);
+})();
+</script>
+</body>
+</html>
