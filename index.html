@@ -165,7 +165,7 @@
   <main id="results"></main>
 
   <footer>
-    Live positions: <a href="https://adsb.lol">adsb.lol</a> (community ADS-B) ·
+    Live positions: <a href="https://adsb.lol">adsb.lol</a> · <a href="https://adsb.one">adsb.one</a> · <a href="https://adsb.fi">adsb.fi</a> (community ADS-B) ·
     Routes: adsb.lol route DB + <a href="https://www.adsbdb.com">adsbdb.com</a> · Photos: <a href="https://www.planespotters.net">Planespotters.net</a><br>
     Positions update every few seconds; routes are best-effort and some flights (private, military, cargo repositioning) won't have one.
   </footer>
@@ -211,23 +211,32 @@
   }
 
   const PROVIDERS = [
-    { name: 'adsb.lol',       url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
-    { name: 'airplanes.live', url: (la, lo, r) => `https://api.airplanes.live/v2/point/${la}/${lo}/${r}` },
-    { name: 'adsb.fi',        url: (la, lo, r) => `https://opendata.adsb.fi/api/v2/lat/${la}/lon/${lo}/dist/${r}` },
+    { name: 'adsb.lol',  url: (la, lo, r) => `https://api.adsb.lol/v2/point/${la}/${lo}/${r}` },
+    { name: 'adsb.one',  url: (la, lo, r) => `https://api.adsb.one/v2/point/${la}/${lo}/${r}` },
+    { name: 'adsb.fi',   url: (la, lo, r) => `https://opendata.adsb.fi/api/v3/lat/${la}/lon/${lo}/dist/${r}` },
   ];
+
+  const PROVIDER_TIMEOUT_MS = 8000;
 
   async function fetchAircraft(lat, lon, radiusNm) {
     const la = lat.toFixed(4), lo = lon.toFixed(4);
     const errors = [];
     for (const p of PROVIDERS) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), PROVIDER_TIMEOUT_MS);
       try {
-        const r = await fetch(p.url(la, lo, radiusNm));
+        const r = await fetch(p.url(la, lo, radiusNm), { signal: ctl.signal, cache: 'no-store' });
         if (!r.ok) { errors.push(`${p.name}: HTTP ${r.status}`); continue; }
         const data = await r.json();
         const ac = (data.ac || data.aircraft || []).filter(a => a.alt_baro !== 'ground' && a.lat != null && a.lon != null);
         return { ac, provider: p.name };
       } catch (e) {
-        errors.push(`${p.name}: ${e.message || 'network/CORS error'}`);
+        // A browser cannot see the status code of a response that fails CORS, so
+        // a 401/403/429 from a provider surfaces here as a generic network error.
+        if (e && e.name === 'AbortError') errors.push(`${p.name}: timed out after ${PROVIDER_TIMEOUT_MS / 1000}s`);
+        else errors.push(`${p.name}: blocked before response (CORS, rate limit, or network)`);
+      } finally {
+        clearTimeout(timer);
       }
     }
     const err = new Error('AC_API');

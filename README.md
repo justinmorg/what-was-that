@@ -19,11 +19,12 @@ If nothing is within range: **"Nothing overhead!"**
 
 | Data | Source |
 |---|---|
-| Live aircraft positions | [adsb.lol](https://api.adsb.lol) community ADS-B network |
+| Live aircraft positions | [adsb.lol](https://api.adsb.lol), falling back to [adsb.one](https://api.adsb.one) then [adsb.fi](https://opendata.adsb.fi) |
 | Flight routes | adsb.lol route database (`/api/0/routeset`) |
 | Aircraft photos | [Planespotters.net public API](https://www.planespotters.net) |
 
 Notes:
+- airplanes.live was dropped as a provider in Sept 2026: its open API is now feeder-only.
 - Routes are best-effort. Private, cargo-repositioning, and military flights often
   have no public route.
 - Your location never touches this repo's code beyond being sent as a search point
